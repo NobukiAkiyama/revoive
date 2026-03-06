@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# ReVoice Data & Logs
+data/
+test_results.txt
+*.log
+
+# Config (Local settings)
+config/settings.json
+config/.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+tests/

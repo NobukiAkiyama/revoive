@@ -1,0 +1,17 @@
+# ReVoice Subtitle Edition - Dependencies
+
+# UI Framework (User implementation)
+PySide6>=6.6.0
+
+# AI Transcription & Editing
+faster-whisper
+numpy
+google-generativeai
+static-ffmpeg
+
+# Utilities
+python-dotenv
+
+# System Requirements (Manual Install):
+# - FFmpeg (must be in system PATH)
+# - DaVinci Resolve (Studio/Free) 17+

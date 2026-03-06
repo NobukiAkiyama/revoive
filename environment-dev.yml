@@ -1,0 +1,19 @@
+name: revoice-dev
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pyside6>=6.6.0
+  - numpy
+  - requests
+  - ffmpeg          # Whisper の動作に必須（これが conda の強み！）
+  - pip
+  - pytest          # 開発時のユニットテスト用
+  - pytest-qt       # PySide6 UI テスト用
+  - pip:
+    - openai-whisper
+    - torch
+    - google-generativeai
+    - python-dotenv
+    - typing-extensions
