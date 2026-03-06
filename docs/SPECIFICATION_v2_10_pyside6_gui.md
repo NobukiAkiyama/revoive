@@ -78,7 +78,6 @@ davinchi-voice-replace/
 ├── extension/
 │   ├── resolve_api.py                ← ✅ 完了（内部優先ブリッジ）
 │   ├── audio_export.py               ← ✅ 完了（音声抽出）
-│   └── track_builder.py              ← ✅ 完了（自動配置エンジン）
 ├── ui/
 │   ├── app_entry.py                  ← ⚡ 修正（メインウィンドウ）
 │   ├── gui_panel_generate.py         ← ✅ 完了（配置パネル）
