@@ -25,6 +25,33 @@ class SubtitlePipeline:
         # AI Editor の初期化
         api_key = settings.get("ai", {}).get("api_key") or os.getenv("GEMINI_API_KEY")
         self.ai_editor = AIEditor(api_key=api_key) if api_key else None
+        
+        # FFmpeg パスの検証
+        self.ffmpeg_path = self.validate_ffmpeg_path(settings.get("ffmpeg_path", "ffmpeg"))
+
+    def validate_ffmpeg_path(self, path: str) -> str:
+        """
+        指定された FFmpeg パスが有効か検証する。
+        無効な場合は static-ffmpeg の使用を試みる。
+        """
+        try:
+            # 指定パスでバージョン確認を試行
+            subprocess.run([path, "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print(f"[pipeline] Valid FFmpeg found at: {path}")
+            return path
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print(f"[pipeline] FFmpeg not found or invalid at: {path}. Trying static-ffmpeg fallback...")
+            try:
+                import static_ffmpeg
+                # パスを通す
+                static_ffmpeg.add_paths()
+                # static_ffmpeg が追加したパスで再確認 (通常は 'ffmpeg' で通るようになる)
+                subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                print("[pipeline] static-ffmpeg successfully initialized.")
+                return "ffmpeg"
+            except (ImportError, subprocess.CalledProcessError):
+                print("[Warning] No valid FFmpeg found. Extraction may fail.")
+                return path # 失敗しても元のパスを返しておく
 
     def extract_audio_ffmpeg(self, video_path: str, output_wav_path: str) -> bool:
         """ 
@@ -34,17 +61,8 @@ class SubtitlePipeline:
         try:
             os.makedirs(os.path.dirname(output_wav_path), exist_ok=True)
             
-            # ffmpeg コマンドの解決 (static-ffmpeg を優先試行)
-            ffmpeg_cmd = 'ffmpeg'
-            try:
-                import static_ffmpeg
-                # パスを通す（必要に応じてダウンロードも行われる）
-                static_ffmpeg.add_paths()
-            except ImportError:
-                pass
-
             cmd = [
-                ffmpeg_cmd, '-y',
+                self.ffmpeg_path, '-y',
                 '-i', video_path,
                 '-vn', # 映像なし
                 '-ac', '1', # モノラル
