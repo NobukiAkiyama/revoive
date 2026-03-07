@@ -7,7 +7,7 @@ Gemini API を使用した字幕テキストの AI 編集ロジック。
 import os
 import json
 import google.generativeai as genai
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, cast
 
 # 字幕セグメントの型定義 (辞書形式)
 SegmentList = List[Dict[str, Any]]
@@ -47,7 +47,7 @@ class AIEditor:
 """
         try:
             response = self.model.generate_content(prompt)
-            return response.text.strip()
+            return cast(str, response.text).strip()
         except Exception as e:
             print(f"[AIEditor] Error refining segment: {e}")
             return text
@@ -71,10 +71,10 @@ class AIEditor:
             chunk = segments[i : i + chunk_size]
             
             # コンテキスト（前のチャンクの末尾数件）の取得
-            context_segments = []
+            context_segments: List[str] = []
             if i > 0:
                 context_start = max(0, i - context_overlap)
-                context_segments = [s.get("speech 2 txt", s.get("text", "")) for s in segments[context_start:i]]
+                context_segments = [str(s.get("speech 2 txt", s.get("text", ""))) for s in segments[context_start:i]]
             
             context_text = "\n".join(context_segments)
             current_texts = [s.get("speech 2 txt", s.get("text", "")) for s in chunk]

@@ -27,10 +27,12 @@ class TranscriptSegment:
     generated_wav_path: str = ""      # TTS生成後に設定
 
 
+import threading
+
 class BaseTranscriber(ABC):
     """音声文字起こしの抽象インターフェース"""
 
     @abstractmethod
-    def transcribe(self, audio_path: str) -> List[TranscriptSegment]:
+    def transcribe(self, audio_path: str, stop_event: Optional[threading.Event] = None) -> Optional[List[TranscriptSegment]]:
         """音声ファイルを文字起こしし、タイムスタンプ付きセグメントを返す"""
         pass

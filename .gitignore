@@ -18,3 +18,5 @@ Thumbs.db
 
 # Project
 tests/
+mypy.ini
+.mypy_cache/

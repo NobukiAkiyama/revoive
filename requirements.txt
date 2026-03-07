@@ -4,6 +4,7 @@
 PySide6>=6.6.0
 
 # AI Transcription & Editing
+ffmpeg-python
 faster-whisper
 numpy
 google-generativeai

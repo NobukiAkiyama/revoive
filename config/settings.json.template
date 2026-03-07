@@ -1,0 +1,19 @@
+{
+    "ffmpeg_path": "ffmpeg",
+    "whisper": {
+        "model": "base",
+        "device": "auto",
+        "language": "ja",
+        "vad_filter": true,
+        "min_speech_duration_ms": 250
+    },
+    "ai": {
+        "api_key": "YOUR_GEMINI_API_KEY_HERE",
+        "auto_refine": true,
+        "refine_instruction": "自然な日本語の字幕に修正してください。"
+    },
+    "gui": {
+        "theme": "dark",
+        "auto_start": false
+    }
+}

@@ -7,10 +7,14 @@ processor/subtitle_pipeline.py
 import os
 import csv
 import subprocess
-from typing import List, Optional, Callable
+import threading
+from typing import List, Optional, Callable, Any
 from processor.base_transcriber import TranscriptSegment
 from processor.adapters.whisper_transcriber import WhisperTranscriber
 from processor.ai_editor import AIEditor
+
+import ffmpeg
+from utils.path_manager import get_project_root, resolve_path
 
 class SubtitlePipeline:
     ai_editor: Optional[AIEditor]
@@ -19,61 +23,98 @@ class SubtitlePipeline:
         self.settings = settings
         self.transcriber = WhisperTranscriber(settings)
         
-        # プロジェクトルートの動的取得 (processor/ 階層の親)
-        self.project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # プロジェクトルートの動的取得
+        self.project_root = get_project_root()
         
         # AI Editor の初期化
         api_key = settings.get("ai", {}).get("api_key") or os.getenv("GEMINI_API_KEY")
         self.ai_editor = AIEditor(api_key=api_key) if api_key else None
         
-        # FFmpeg パスの検証
+        # FFmpeg パスの検証 (ffmpeg-python はシステムパスの ffmpeg を優先するが、
+        # 必要に応じて static-ffmpeg 等で補完する)
         self.ffmpeg_path = self.validate_ffmpeg_path(settings.get("ffmpeg_path", "ffmpeg"))
+        
+        # 停止イベント
+        self.stop_event: Optional[threading.Event] = None
+
+    def set_stop_event(self, event: Optional[threading.Event]):
+        self.stop_event = event
+
+    def _is_stopped(self) -> bool:
+        event = self.stop_event
+        return event is not None and event.is_set()
 
     def validate_ffmpeg_path(self, path: str) -> str:
         """
-        指定された FFmpeg パスが有効か検証する。
-        無効な場合は static-ffmpeg の使用を試みる。
+        FFmpeg が利用可能か検証する。
         """
         try:
-            # 指定パスでバージョン確認を試行
+            # ffmpeg.probe を使って簡単な検証 (自分のソース自身をプローブするのは難しいため version 確認)
             subprocess.run([path, "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print(f"[pipeline] Valid FFmpeg found at: {path}")
             return path
         except (subprocess.CalledProcessError, FileNotFoundError):
-            print(f"[pipeline] FFmpeg not found or invalid at: {path}. Trying static-ffmpeg fallback...")
+            print(f"[pipeline] FFmpeg not found at: {path}. Trying static-ffmpeg fallback...")
             try:
                 import static_ffmpeg
-                # パスを通す
                 static_ffmpeg.add_paths()
-                # static_ffmpeg が追加したパスで再確認 (通常は 'ffmpeg' で通るようになる)
                 subprocess.run(["ffmpeg", "-version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                print("[pipeline] static-ffmpeg successfully initialized.")
                 return "ffmpeg"
             except (ImportError, subprocess.CalledProcessError):
-                print("[Warning] No valid FFmpeg found. Extraction may fail.")
-                return path # 失敗しても元のパスを返しておく
+                print("[Warning] No valid FFmpeg found.")
+                return path
 
     def extract_audio_ffmpeg(self, video_path: str, output_wav_path: str) -> bool:
         """ 
-        ffmpeg を使用して動画から音声を抽出する。
+        ffmpeg-python を使用して動画から音声を抽出する。
         仕様: 16000Hz, Mono, 16bit PCM (Whisper最適設定)
         """
         try:
+            video_path = os.path.normpath(video_path)
+            output_wav_path = os.path.normpath(output_wav_path)
             os.makedirs(os.path.dirname(output_wav_path), exist_ok=True)
             
-            cmd = [
-                self.ffmpeg_path, '-y',
-                '-i', video_path,
-                '-vn', # 映像なし
-                '-ac', '1', # モノラル
-                '-ar', '16000', # 16kHz
-                '-acodec', 'pcm_s16le', # 16-bit
-                output_wav_path
-            ]
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return os.path.exists(output_wav_path)
+            # 入力ストリーム定式化
+            stream = ffmpeg.input(video_path)
+            
+            # 音声フィルタと出力設定
+            # vn: 映像なし, ac: 1 (モノラル), ar: 16000 (16kHz), acodec: pcm_s16le
+            stream = ffmpeg.output(
+                stream, 
+                output_wav_path, 
+                vn=None, 
+                ac=1, 
+                ar='16000', 
+                acodec='pcm_s16le'
+            )
+            
+            # 停止イベントの監視をしつつ実行するために、別スレッドで run するか
+            # あるいは ffmpeg.run はプロセスをブロッキングするため、Popen 的な挙動が必要な場合は 
+            # compile -> run_async を使用する。
+            
+            process = ffmpeg.run_async(stream, cmd=self.ffmpeg_path, overwrite_output=True, pipe_stdout=True, pipe_stderr=True)
+
+            while process.poll() is None:
+                if self._is_stopped():
+                    process.terminate()
+                    process.wait()
+                    print("[pipeline] FFmpeg process terminated by user.")
+                    return False
+                import time
+                time.sleep(0.1)
+
+            if process.returncode != 0:
+                _, stderr = process.communicate()
+                print(f"[pipeline] FFmpeg failed (code: {process.returncode})")
+                print(f"[pipeline] Error: {stderr.decode('utf-8', 'replace')}")
+                return False
+
+            if not os.path.exists(output_wav_path) or os.path.getsize(output_wav_path) < 1024:
+                return False
+
+            return True
+            
         except Exception as e:
-            print(f"[pipeline] ffmpeg error: {e}")
+            print(f"[pipeline] ffmpeg-python error: {e}")
             return False
 
     def segments_to_csv(self, segments: List[TranscriptSegment], output_path: str, fps: float) -> bool:
@@ -140,46 +181,74 @@ class SubtitlePipeline:
             print(f"[pipeline] csv_to_srt error: {e}")
             return False
 
-    def run_full_pipeline(self, audio_path: str, output_base_name: str, fps: float, log_callback: Optional[Callable[[str], None]] = None) -> Optional[str]:
+    def run_full_pipeline(self, 
+                          audio_path: str, 
+                          output_base_name: str, 
+                          fps: float, 
+                          log_callback: Optional[Callable[[str], None]] = None,
+                          progress_callback: Optional[Callable[[int], None]] = None
+                          ) -> Optional[str]:
         """ 
         音声 -> CSV -> SRT の一連の流れ。
-        audio_path: ユーザーから受け取った絶対パス or 内部解決済みパス
-        output_base_name: 出力ファイルのベース名（拡張子なし、絶対パス推奨）
         """
         try:
             def log(msg):
                 if log_callback: log_callback(msg)
                 else: print(msg)
+            
+            def report_progress(p):
+                if progress_callback: progress_callback(p)
 
             # パスの正規化 (Windows/Unix 共通)
             audio_path = os.path.normpath(audio_path)
             output_base_name = os.path.normpath(output_base_name)
 
             log(">>> [Step 1] Whisper による音声認識開始...")
-            segments = self.transcriber.transcribe(audio_path)
+            report_progress(45)
+            
+            if self._is_stopped(): return None
+            
+            # transber.transcribe にも stop_event を渡す
+            segments = self.transcriber.transcribe(audio_path, stop_event=self.stop_event)
+            
+            if self._is_stopped() or segments is None:
+                log("[pipeline] Transcription cancelled or failed.")
+                return None
+            
             log(f"   ✓ {len(segments)} セグメントを検出。")
+            report_progress(70)
 
-            # AI による自動修正 (オプション)
+            # AI による自動修正
             editor = self.ai_editor
             if editor and self.settings.get("ai", {}).get("auto_refine", False):
+                if self._is_stopped(): return None
                 log(">>> [Phase 1.5] AI によるテキスト自動修正中...")
                 seg_dicts = [{"text": s.text} for s in segments]
                 instruction = self.settings.get("ai", {}).get("refine_instruction", "自然な日本語の字幕に修正してください。")
                 refined = editor.batch_refine(seg_dicts, instruction)
+                
+                if self._is_stopped(): return None
+                
                 for i, r in enumerate(refined):
                     segments[i].text = r.get("text", segments[i].text)
                 log("   ✓ AI 修正完了。")
+            
+            report_progress(85)
+            if self._is_stopped(): return None
 
             csv_path = output_base_name + ".csv"
             log(f">>> [Step 2] CSV 出力 (p=923準拠): {os.path.basename(csv_path)}")
             if not self.segments_to_csv(segments, csv_path, fps):
                 return None
 
+            if self._is_stopped(): return None
+            
             srt_path = output_base_name + ".srt"
             log(f">>> [Step 3] SRT 変換 (p=963準拠): {os.path.basename(srt_path)}")
             if not self.csv_to_srt(csv_path, srt_path, fps):
                 return None
 
+            report_progress(100)
             return srt_path
         except Exception as e:
             print(f"[pipeline] run_full_pipeline error: {e}")
