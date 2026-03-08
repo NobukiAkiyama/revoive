@@ -4,12 +4,10 @@ extension/resolve_api.py
 DaVinci Resolve API への接続ブリッジ (堅牢版)
 """
 
+import math
 import os
 import sys
-from typing import Any, Optional, cast
-
-import math
-from typing import Any, Optional, cast, Dict
+from typing import Any, Dict, Optional, cast
 
 _resolve_instance: Optional[Any] = None
 
@@ -228,108 +226,6 @@ def get_resolve(resolve_obj: Optional[Any] = None) -> Optional[Any]:
         print(f"[resolve] External connection failed: {e}")
 
     return None
-
-def render_timeline(resolve: Any, output_path: str) -> Optional[str]:
-    """
-    戻り値: JobId (string)
-    """
-    try:
-        project_manager = resolve.GetProjectManager()
-        project = project_manager.GetCurrentProject()
-        if not project:
-            return None
-
-        # 0. 既存ジョブの掃除 (JobId, jobId 両方のキーに対応)
-        jobs = project.GetRenderJobList()
-        for j in jobs:
-            jid = j.get("JobId") or j.get("jobId")
-            name = j.get("OutputFilename", "") or j.get("CustomName", "")
-            if jid and "ReVoice_Temp" in name:
-                project.DeleteRenderJob(jid)
-
-        resolve.OpenPage("deliver")
-
-        output_path = os.path.normpath(output_path)
-        dir_name = os.path.dirname(output_path)
-        base_name = os.path.basename(output_path)
-        file_no_ext = os.path.splitext(base_name)[0]
-
-        # 形式設定
-        project.SetCurrentRenderFormatAndCodec("wav", "pcm")
-
-        # Mark In/Out の取得と設定
-        mark_info = get_timeline_mark_in_out(resolve)
-        mark_in = mark_info.get("in")
-        mark_out = mark_info.get("out")
-
-        render_settings = {
-            "SelectAllFrames": True if (mark_in is None and mark_out is None) else False,
-            "TargetDir": dir_name,
-            "CustomName": f"ReVoice_Temp_{file_no_ext}",
-            "ExportVideo": False,
-            "ExportAudio": True,
-            "AudioBitDepth": 16,
-            "AudioSampleRate": 48000
-        }
-
-        if mark_in is not None:
-            render_settings["MarkIn"] = mark_in
-        if mark_out is not None:
-            render_settings["MarkOut"] = mark_out
-        
-        if not project.SetRenderSettings(render_settings):
-            return None
-
-        job_id = project.AddRenderJob()
-        if job_id:
-            print(f"[resolve] Added render job: {job_id}")
-            project.StartRendering(job_id) # 単一IDまたはリスト
-            return cast(str, job_id)
-        return None
-    except Exception as e:
-        print(f"[resolve] Render error: {e}")
-        return None
-
-def is_rendering_finished(resolve: Any, job_id: str) -> bool:
-    try:
-        project_manager = resolve.GetProjectManager()
-        project = project_manager.GetCurrentProject()
-        status = project.GetRenderJobStatus(job_id)
-        
-        if not status:
-            return False
-            
-        # キー名の揺れに対応 (JobStatus, jobStatus)
-        job_status = (status.get("JobStatus") or status.get("jobStatus", "")).lower()
-        completion = status.get("CompletionPercentage", 0)
-        
-        print(f"[resolve] Job Status: {job_status} ({completion}%)")
-
-        # 完了判定の拡張
-        if job_status in ["complete", "completed"]:
-            return True
-        if job_status == "failed":
-            print(f"[resolve] Render job {job_id} failed.")
-            return True
-        
-        # 100% でレンダリング中でない場合は完了とみなす (バグ回避)
-        if completion == 100 and not project.IsRenderingInProgress():
-            print("[resolve] Rendering finished (detected via idle status).")
-            return True
-            
-        return False
-    except Exception:
-        return False
-
-def cleanup_render_jobs(resolve: Any, job_id: Optional[str] = None) -> None:
-    try:
-        project_manager = resolve.GetProjectManager()
-        project = project_manager.GetCurrentProject()
-        if job_id:
-            project.DeleteRenderJob(job_id)
-            print(f"[resolve] Deleted temporary job: {job_id}")
-    except Exception:
-        pass
 
 def seek_to_segment(timeline: Any, start_frame: int) -> bool:
     if not timeline: return False
