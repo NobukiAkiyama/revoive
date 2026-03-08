@@ -205,9 +205,11 @@ def init_q_application() -> Optional[Any]:
         print("[Error] PySide6 がインストールされていません。GUIモードは利用できません。")
         return None
 
-def run_gui_mode(resolve_obj: Optional[Any] = None) -> None:
+def run_gui_mode(video_path: Optional[str] = None, fps: float = 0.0,
+                 resolve_obj: Optional[Any] = None) -> None:
     """
-    GUIモードでの起動
+    GUIモードでの起動。
+    video_path と fps は resolve_launcher.py から渡されるコンテキスト情報。
     """
     app = init_q_application()
     if not app:
@@ -220,38 +222,54 @@ def run_gui_mode(resolve_obj: Optional[Any] = None) -> None:
     # FFmpeg 環境の確保
     ffmpeg_dir = ensure_ffmpeg_env()
     if ffmpeg_dir:
-        settings_mgr.set("ffmpeg_path", ffmpeg_dir)
+        ffmpeg_exe = os.path.join(ffmpeg_dir, "ffmpeg.exe" if os.name == 'nt' else "ffmpeg")
+        if os.path.exists(ffmpeg_exe):
+            settings_mgr.set("ffmpeg_path", ffmpeg_exe)
+        else:
+            settings_mgr.set("ffmpeg_path", "ffmpeg")
+
+    # Gemini API チェック
+    from utils.health_check import HealthCheck
+    api_key = settings_mgr.get("ai.api_key")
+    health_results = HealthCheck.run_all(api_key=api_key)
+    gemini_status = next((r for r in health_results if r["name"] == "Gemini API"), None)
+    if gemini_status and not gemini_status["status"]:
+        settings_mgr.set("ai.auto_refine", False)
 
     print(f"[Info] Starting ReVoice {get_version_string()} GUI...")
-    # TODO: MainWindow の実装と表示
-    # from ui.main_window import MainWindow
-    # window = MainWindow(settings_mgr, resolve_obj)
-    # window.show()
-    
-    # ダミーとしての待機 (実際は app.exec())
-    print("[Pending] GUI implementation is required.")
-    # sys.exit(app.exec())
+
+    from ui.main_window import MainWindow
+    window = MainWindow(video_path=video_path, fps=fps, resolve_obj=resolve_obj)
+    window.show()
+    sys.exit(app.exec())
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ReVoice Subtitle Edition")
-    parser.add_argument("video", nargs="?", help="Video file path (Headless only)")
+    parser.add_argument("video", nargs="?", help="Video file path")
     parser.add_argument("--headless", action="store_true", help="Run in headless CLI mode")
+    parser.add_argument("--gui", action="store_true", help="Force GUI mode (default when no --headless)")
     parser.add_argument("--refine", action="store_true", help="Force enable AI refinement")
     parser.add_argument("--fps", type=float, default=0.0, help="Override FPS")
     parser.add_argument("--config", help="Custom settings.json path")
     parser.add_argument("--version", action="version", version=get_version_string())
 
     args = parser.parse_args()
-    resolve = get_resolve()
 
     # モード判定
-    if args.headless or args.video:
+    if args.headless:
+        # CLI モード (後方互換)
         if not args.video:
             print("[Error] Video path is required for headless mode.")
             sys.exit(1)
         run_headless_workflow(args)
     else:
-        run_gui_mode(resolve)
+        # GUI モード (デフォルト)
+        resolve = get_resolve()
+        run_gui_mode(
+            video_path=args.video,
+            fps=args.fps,
+            resolve_obj=resolve
+        )
 
 if __name__ == "__main__":
     main()

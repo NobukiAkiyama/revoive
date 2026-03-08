@@ -13,6 +13,7 @@ import os
 class SubtitleWorker(QThread):
     """
     字幕生成パイプラインを別スレッドで実行する Worker。
+    resolve が None の場合は外部 GUI モード (FPS は直接指定)。
     """
     # UI 側で受け取るためのシグナル定義
     progress = Signal(int)    # 進捗率 (0-100)
@@ -25,33 +26,46 @@ class SubtitleWorker(QThread):
                  video_path: str, 
                  resolve: Any, 
                  settings: Dict[str, Any],
-                 project_root: str) -> None:
+                 project_root: str,
+                 fps: float = 0.0,
+                 offset_frame: int = 0) -> None:
         super().__init__()
         self.video_path = video_path
         self.resolve = resolve
         self.settings = settings
         self.project_root = project_root
+        self._fps = fps
+        self._offset_frame = offset_frame
         self._stop_event = threading.Event()
 
     def run(self) -> None:
         """
         別スレッドで実行されるメイン処理。
+        resolve が None の場合は外部 GUI モード (self._fps を使用)。
         """
         try:
             from processor.workflow_engine import run_standard_workflow
             
             self.log_message.emit(">>> [Worker] ワークフロー開始...")
 
-            # 1. Timeline から FPS 取得
-            project_manager = self.resolve.GetProjectManager()
-            project = project_manager.GetCurrentProject()
-            timeline = project.GetCurrentTimeline()
-            if not timeline:
-                self.error.emit("タイムラインが見つかりません。")
-                return
-            
-            fps = float(timeline.GetSetting("timelineFrameRate"))
-            self.log_message.emit(f"[Info] Timeline FPS: {fps}")
+            # 1. FPS 決定
+            fps = self._fps
+            offset_frame = self._offset_frame
+            if self.resolve is not None and fps <= 0:
+                # Resolve 内部モード: Timeline から FPS 取得
+                project_manager = self.resolve.GetProjectManager()
+                project = project_manager.GetCurrentProject()
+                timeline = project.GetCurrentTimeline()
+                if not timeline:
+                    self.error.emit("タイムラインが見つかりません。")
+                    return
+                fps = float(timeline.GetSetting("timelineFrameRate"))
+                self.log_message.emit(f"[Info] Timeline FPS: {fps}")
+            elif fps <= 0:
+                fps = 24.0
+                self.log_message.emit(f"[Info] Using default FPS: {fps}")
+            else:
+                self.log_message.emit(f"[Info] FPS: {fps}")
 
             # 2. ジェネレーターの取得と反復
             engine_gen = run_standard_workflow(
@@ -59,6 +73,7 @@ class SubtitleWorker(QThread):
                 settings=self.settings,
                 fps=fps,
                 project_root=self.project_root,
+                offset_frame=offset_frame,
                 log_callback=lambda msg: self.log_message.emit(msg),
                 stop_event=self._stop_event
             )

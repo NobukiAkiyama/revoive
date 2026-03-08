@@ -97,11 +97,24 @@ def main() -> None:
         latest_input = max(files_only, key=os.path.getmtime)
 
         # 4. 外部プロセス起動 (システムの Python を使用)
+        #    GUI モード: --gui で起動、--fps でフレームレートを渡す
         python_exe = "python"
         app_entry = os.path.normpath(os.path.join(PROJECT_ROOT, "app_entry.py"))
-        cmd = [python_exe, app_entry, latest_input, "--headless", "--refine"]
 
-        print(f"[ReVoice] Launching Headless Workflow...")
+        # FPS 取得
+        timeline = project.GetCurrentTimeline()
+        timeline_fps = 0.0
+        if timeline:
+            try:
+                timeline_fps = float(timeline.GetSetting("timelineFrameRate"))
+            except Exception:
+                pass
+
+        cmd = [python_exe, app_entry, latest_input, "--gui"]
+        if timeline_fps > 0:
+            cmd += ["--fps", str(timeline_fps)]
+
+        print(f"[ReVoice] Launching GUI Workflow...")
         try:
             creation_flags = subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
             process = subprocess.Popen(cmd, cwd=PROJECT_ROOT, creationflags=creation_flags)
