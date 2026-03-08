@@ -8,7 +8,7 @@ import os
 import csv
 import subprocess
 import threading
-from typing import List, Optional, Callable, Any
+from typing import List, Optional, Callable, Any, Dict
 from processor.base_transcriber import TranscriptSegment
 from processor.adapters.whisper_transcriber import WhisperTranscriber
 from processor.ai_editor import AIEditor
@@ -19,7 +19,7 @@ from utils.path_manager import get_project_root, resolve_path
 class SubtitlePipeline:
     ai_editor: Optional[AIEditor]
     
-    def __init__(self, settings: dict):
+    def __init__(self, settings: Dict[str, Any]) -> None:
         self.settings = settings
         self.transcriber = WhisperTranscriber(settings)
         
@@ -37,7 +37,7 @@ class SubtitlePipeline:
         # 停止イベント
         self.stop_event: Optional[threading.Event] = None
 
-    def set_stop_event(self, event: Optional[threading.Event]):
+    def set_stop_event(self, event: Optional[threading.Event]) -> None:
         self.stop_event = event
 
     def _is_stopped(self) -> bool:
@@ -117,7 +117,7 @@ class SubtitlePipeline:
             print(f"[pipeline] ffmpeg-python error: {e}")
             return False
 
-    def segments_to_csv(self, segments: List[TranscriptSegment], output_path: str, fps: float) -> bool:
+    def segments_to_csv(self, segments: List[TranscriptSegment], output_path: str, fps: float, offset_frame: int = 0) -> bool:
         """ 
         リファレンス p=923 に準拠した CSV 出力。 
         """
@@ -127,7 +127,8 @@ class SubtitlePipeline:
                 writer = csv.writer(f)
                 writer.writerow(['speech start time', 'speech duration', 'speech 2 txt'])
                 for seg in segments:
-                    start_frame = int(seg.start * fps)
+                    # offset_frame を加算
+                    start_frame = int(seg.start * fps) + offset_frame
                     duration = seg.end - seg.start
                     writer.writerow([start_frame, f"{duration:.3f}", seg.text])
             return True
@@ -135,12 +136,13 @@ class SubtitlePipeline:
             print(f"[pipeline] segments_to_csv error: {e}")
             return False
 
-    def csv_to_srt(self, csv_path: str, output_path: str, fps: float) -> bool:
+    def csv_to_srt(self, csv_path: str, output_path: str, fps: float, offset_frame: int = 0) -> bool:
         """ 
         リファレンス p=963 に準拠した SRT 変換。
         """
         try:
             def convert_seconds_to_srt_format(frame: int, fps_val: float) -> str:
+                # タイムコードとしての秒数に変換 (fps_val で割る)
                 seconds = frame / fps_val
                 hours = int(seconds // 3600)
                 minutes = int((seconds % 3600) // 60)
@@ -185,6 +187,7 @@ class SubtitlePipeline:
                           audio_path: str, 
                           output_base_name: str, 
                           fps: float, 
+                          offset_frame: int = 0,
                           log_callback: Optional[Callable[[str], None]] = None,
                           progress_callback: Optional[Callable[[int], None]] = None
                           ) -> Optional[str]:
@@ -192,11 +195,11 @@ class SubtitlePipeline:
         音声 -> CSV -> SRT の一連の流れ。
         """
         try:
-            def log(msg):
+            def log(msg: str) -> None:
                 if log_callback: log_callback(msg)
                 else: print(msg)
             
-            def report_progress(p):
+            def report_progress(p: int) -> None:
                 if progress_callback: progress_callback(p)
 
             # パスの正規化 (Windows/Unix 共通)
@@ -208,8 +211,13 @@ class SubtitlePipeline:
             
             if self._is_stopped(): return None
             
-            # transber.transcribe にも stop_event を渡す
-            segments = self.transcriber.transcribe(audio_path, stop_event=self.stop_event)
+            # transcriber.transcribe に stop_event と progress_callback を渡す
+            # 字幕生成の進捗管理 (transcribe は 45->70%)
+            def whisper_prog(msg: str, p: float) -> None:
+                log(msg)
+                report_progress(45 + int(p * 25))
+
+            segments = self.transcriber.transcribe(audio_path, stop_event=self.stop_event, progress_callback=whisper_prog)
             
             if self._is_stopped() or segments is None:
                 log("[pipeline] Transcription cancelled or failed.")
@@ -225,7 +233,13 @@ class SubtitlePipeline:
                 log(">>> [Phase 1.5] AI によるテキスト自動修正中...")
                 seg_dicts = [{"text": s.text} for s in segments]
                 instruction = self.settings.get("ai", {}).get("refine_instruction", "自然な日本語の字幕に修正してください。")
-                refined = editor.batch_refine(seg_dicts, instruction)
+                
+                # AI修正規格 (70->85%)
+                def ai_prog(msg: str, p: float) -> None:
+                    log(msg)
+                    report_progress(70 + int(p * 15))
+
+                refined = editor.batch_refine(seg_dicts, instruction, progress_callback=ai_prog)
                 
                 if self._is_stopped(): return None
                 
@@ -238,14 +252,14 @@ class SubtitlePipeline:
 
             csv_path = output_base_name + ".csv"
             log(f">>> [Step 2] CSV 出力 (p=923準拠): {os.path.basename(csv_path)}")
-            if not self.segments_to_csv(segments, csv_path, fps):
+            if not self.segments_to_csv(segments, csv_path, fps, offset_frame=offset_frame):
                 return None
 
             if self._is_stopped(): return None
             
             srt_path = output_base_name + ".srt"
             log(f">>> [Step 3] SRT 変換 (p=963準拠): {os.path.basename(srt_path)}")
-            if not self.csv_to_srt(csv_path, srt_path, fps):
+            if not self.csv_to_srt(csv_path, srt_path, fps, offset_frame=offset_frame):
                 return None
 
             report_progress(100)

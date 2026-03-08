@@ -10,7 +10,7 @@ if PROJECT_ROOT not in sys.path:
 
 from processor.subtitle_pipeline import SubtitlePipeline
 
-def test_ffmpeg_robustness():
+def test_ffmpeg_robustness() -> None:
     print(">>> Testing FFmpeg robustness logic (ffmpeg-python version)...")
     settings = {
         "ffmpeg_path": "ffmpeg",

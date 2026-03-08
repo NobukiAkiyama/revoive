@@ -25,7 +25,7 @@ class SubtitleWorker(QThread):
                  video_path: str, 
                  resolve: Any, 
                  settings: Dict[str, Any],
-                 project_root: str):
+                 project_root: str) -> None:
         super().__init__()
         self.video_path = video_path
         self.resolve = resolve
@@ -33,7 +33,7 @@ class SubtitleWorker(QThread):
         self.project_root = project_root
         self._stop_event = threading.Event()
 
-    def run(self):
+    def run(self) -> None:
         """
         別スレッドで実行されるメイン処理。
         """
@@ -88,7 +88,7 @@ class SubtitleWorker(QThread):
             self.log_message.emit(f"[Fatal Error] {err_details}")
             self.error.emit(str(e))
 
-    def cancel(self):
+    def cancel(self) -> None:
         """
         処理を中断する。
         """

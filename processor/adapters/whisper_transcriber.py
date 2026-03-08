@@ -28,26 +28,37 @@ class WhisperTranscriber(BaseTranscriber):
         self.vad_filter = whisper_cfg.get("vad_filter", True)
         self.min_duration_ms = whisper_cfg.get("min_speech_duration_ms", 250)
 
-        # 初回のモデルロード
-        self._initialize_model(self.device)
-
-    def _initialize_model(self, device: str):
+    def _initialize_model(self, device: str, progress_callback: Optional[Any] = None) -> None:
         """モデルの初期化。"""
         try:
-            print(f"[Whisper] Loading model '{self.model_name}' on '{device}'...")
+            msg = f"[Whisper] Loading model '{self.model_name}' on '{device}'..."
+            print(msg)
+            if progress_callback:
+                progress_callback(msg, 0)
+                
             self.model = self.FasterWhisperModel(self.model_name, device=device)
             self.device = device
+            
+            if progress_callback:
+                progress_callback(f"[Whisper] Model loaded on '{device}'.", 0)
         except Exception as e:
             if device != "cpu":
-                print(f"[Warning] GPU initialization failed: {e}. Switching to CPU...")
-                self._initialize_model("cpu")
+                msg = f"[Warning] GPU initialization failed: {e}. Switching to CPU..."
+                print(msg)
+                if progress_callback:
+                    progress_callback(msg, 0)
+                self._initialize_model("cpu", progress_callback)
             else:
                 raise RuntimeError(f"Whisper failed even on CPU: {e}")
 
-    def transcribe(self, audio_path: str, stop_event: Optional[threading.Event] = None) -> Optional[List[TranscriptSegment]]:
+    def transcribe(self, audio_path: str, stop_event: Optional[threading.Event] = None, progress_callback: Optional[Any] = None) -> Optional[List[TranscriptSegment]]:
         """文字起こし実行 (DLLエラー時も自動復旧)"""
         if not os.path.exists(audio_path):
             raise RuntimeError(f"File not found: {audio_path}")
+
+        # モデルの遅延ロード
+        if self.model is None:
+            self._initialize_model(self.device, progress_callback)
 
         try:
             return self._run_transcription(audio_path, stop_event)

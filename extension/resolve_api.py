@@ -8,7 +8,100 @@ import os
 import sys
 from typing import Any, Optional, cast
 
+import math
+from typing import Any, Optional, cast, Dict
+
 _resolve_instance: Optional[Any] = None
+
+def frame_to_timecode(frame: int, fps: float) -> str:
+    """
+    Drop Frame (DF) 対応のタイムコード変換。
+    """
+    drop_frame_rates = [29.97, 59.94]
+    is_df = any(abs(fps - df) < 0.01 for df in drop_frame_rates)
+
+    if is_df:
+        fps_round        = round(fps)
+        drop_frames      = round(fps * 0.066666) # 2 or 4
+        frames_per_10min = round(fps * 60 * 10)
+        frames_per_min   = fps_round * 60 - drop_frames
+
+        frame = frame % round(fps * 3600 * 24)
+        d = math.floor(frame / frames_per_10min)
+        m = frame % frames_per_10min
+
+        if m > drop_frames:
+            frame += drop_frames * 9 * d + drop_frames * math.floor((m - drop_frames) / frames_per_min)
+        else:
+            frame += drop_frames * 9 * d
+
+        f  = frame % fps_round
+        s  = math.floor(frame / fps_round) % 60
+        mn = math.floor(math.floor(frame / fps_round) / 60) % 60
+        h  = math.floor(math.floor(math.floor(frame / fps_round) / 60) / 60)
+        sep = ";"
+    else:
+        fps_r = round(fps)
+        f  = frame % fps_r
+        s  = math.floor(frame / fps_r) % 60
+        mn = math.floor(math.floor(frame / fps_r) / 60) % 60
+        h  = math.floor(math.floor(math.floor(frame / fps_r) / 60) / 60)
+        sep = ":"
+
+    return f"{int(h):02}{sep}{int(mn):02}{sep}{int(s):02}{sep}{int(f):02}"
+
+def get_timeline_mark_in_out(resolve: Any) -> Dict[str, Optional[int]]:
+    """
+    タイムラインの Mark In / Out フレームを取得する。
+    """
+    try:
+        project = resolve.GetProjectManager().GetCurrentProject()
+        timeline = project.GetCurrentTimeline()
+        mark_info = timeline.GetMarkInOut()
+        video = mark_info.get("video", {})
+        
+        return {
+            "in": video.get("in"),
+            "out": video.get("out")
+        }
+    except Exception as e:
+        print(f"[resolve] Error getting Mark In/Out: {e}")
+        return {"in": None, "out": None}
+
+def get_current_context() -> Dict[str, Any]:
+    """
+    現在の Resolve のプロジェクトとタイムラインの情報を取得する。
+    """
+    resolve = get_resolve()
+    if not resolve:
+        return {"error": "Resolve API not available"}
+
+    try:
+        project_manager = resolve.GetProjectManager()
+        project = project_manager.GetCurrentProject()
+        if not project:
+            return {"error": "No project open"}
+
+        timeline = project.GetCurrentTimeline()
+        if not timeline:
+            return {
+                "project_name": project.GetName(),
+                "error": "No timeline open"
+            }
+
+        # 基本情報の取得
+        mark_info = get_timeline_mark_in_out(resolve)
+        
+        return {
+            "project_name": project.GetName(),
+            "timeline_name": timeline.GetName(),
+            "fps": float(timeline.GetSetting("timelineFrameRate")),
+            "resolution": f"{timeline.GetSetting('timelineResolutionWidth')}x{timeline.GetSetting('timelineResolutionHeight')}",
+            "mark_in": mark_info.get("in"),
+            "mark_out": mark_info.get("out")
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 def get_resolve_lib_path() -> Optional[str]:
     """
@@ -90,7 +183,7 @@ def get_resolve(resolve_obj: Optional[Any] = None) -> Optional[Any]:
     # 外部プロセスからの接続試行
     script_lib_path = get_resolve_lib_path()
     if not script_lib_path:
-        print("[resolve] Could not find fusionscript library. Please ensure DaVinci Resolve is installed.")
+        print("[resolve] Could find fusionscript library. Please ensure DaVinci Resolve is installed.")
         return None
 
     # Modules パスの追加 (Scripting/Modules)
@@ -164,8 +257,13 @@ def render_timeline(resolve: Any, output_path: str) -> Optional[str]:
         # 形式設定
         project.SetCurrentRenderFormatAndCodec("wav", "pcm")
 
+        # Mark In/Out の取得と設定
+        mark_info = get_timeline_mark_in_out(resolve)
+        mark_in = mark_info.get("in")
+        mark_out = mark_info.get("out")
+
         render_settings = {
-            "SelectAllFrames": True,
+            "SelectAllFrames": True if (mark_in is None and mark_out is None) else False,
             "TargetDir": dir_name,
             "CustomName": f"ReVoice_Temp_{file_no_ext}",
             "ExportVideo": False,
@@ -173,6 +271,11 @@ def render_timeline(resolve: Any, output_path: str) -> Optional[str]:
             "AudioBitDepth": 16,
             "AudioSampleRate": 48000
         }
+
+        if mark_in is not None:
+            render_settings["MarkIn"] = mark_in
+        if mark_out is not None:
+            render_settings["MarkOut"] = mark_out
         
         if not project.SetRenderSettings(render_settings):
             return None
@@ -218,7 +321,7 @@ def is_rendering_finished(resolve: Any, job_id: str) -> bool:
     except Exception:
         return False
 
-def cleanup_render_jobs(resolve: Any, job_id: Optional[str] = None):
+def cleanup_render_jobs(resolve: Any, job_id: Optional[str] = None) -> None:
     try:
         project_manager = resolve.GetProjectManager()
         project = project_manager.GetCurrentProject()

@@ -12,7 +12,7 @@ if PROJECT_ROOT not in sys.path:
 from config.settings_manager import SettingsManager
 from processor.workflow_engine import run_standard_workflow
 
-def test_settings_manager():
+def test_settings_manager() -> None:
     print(">>> [Test] SettingsManager Verification...")
     mgr = SettingsManager()
     config_path = os.path.join(PROJECT_ROOT, "config", "test_settings.json")
@@ -31,7 +31,7 @@ def test_settings_manager():
     print("   ✓ Persistence OK")
 
     # 4. スレッドセーフティ (簡易)
-    def worker():
+    def worker() -> None:
         for _ in range(100):
             mgr.set("gui.theme", "light")
             mgr.get("gui.theme")
@@ -45,7 +45,7 @@ def test_settings_manager():
     if os.path.exists(config_path):
         os.remove(config_path)
 
-def test_engine_generator():
+def test_engine_generator() -> None:
     print(">>> [Test] Engine Generator & Cancellation Verification...")
     stop_event = threading.Event()
     

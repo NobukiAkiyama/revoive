@@ -12,14 +12,14 @@ class SettingsManager:
     _lock = threading.Lock()
     _initialized: bool = False
 
-    def __new__(cls):
+    def __new__(cls) -> 'SettingsManager':
         with cls._lock:
             if cls._instance is None:
                 cls._instance = super(SettingsManager, cls).__new__(cls)
                 cls._instance._initialized = False
             return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._initialized:
             return
         
@@ -49,13 +49,13 @@ class SettingsManager:
         }
         self._initialized = True
 
-    def initialize(self, config_path: str):
+    def initialize(self, config_path: str) -> None:
         """設定ファイルを読み込み、初期化する。"""
         self._config_path = os.path.normpath(config_path)
         self.load()
         self._merge_env_vars()
 
-    def _merge_env_vars(self):
+    def _merge_env_vars(self) -> None:
         """環境変数からの上書き (GEMINI_API_KEY等)"""
         gemini_key = os.getenv("GEMINI_API_KEY")
         if gemini_key:
@@ -63,7 +63,7 @@ class SettingsManager:
                 self._settings["ai"] = {}
             self._settings["ai"]["api_key"] = gemini_key
 
-    def load(self):
+    def load(self) -> None:
         """JSONファイルから設定をロードする。"""
         with self._save_lock:
             # 1. デフォルト値をベースにする
@@ -78,7 +78,7 @@ class SettingsManager:
                 except Exception as e:
                     print(f"[Settings] Failed to load {self._config_path}: {e}")
 
-    def save(self):
+    def save(self) -> None:
         """現在の設定をJSONファイルに保存する。"""
         config_path = self._config_path
         if not config_path:
@@ -107,7 +107,7 @@ class SettingsManager:
                     return default
             return value
 
-    def set(self, key_path: str, value: Any):
+    def set(self, key_path: str, value: Any) -> None:
         """ドット区切りのパスで設定を更新する。"""
         with self._save_lock:
             keys = key_path.split('.')
@@ -120,9 +120,21 @@ class SettingsManager:
                 target = target[k]
             
             if isinstance(target, dict) and len(keys) > 0:
-                target[keys[-1]] = value
+                key = keys[-1]
+                # バリデーション
+                if key_path == "whisper.model":
+                    valid_models = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large"]
+                    if value not in valid_models:
+                        print(f"[Settings] Warning: Invalid whisper model '{value}'. Keeping default.")
+                        return
+                elif key_path == "whisper.min_speech_duration_ms":
+                    if not isinstance(value, (int, float)) or value < 0:
+                        print(f"[Settings] Warning: Invalid duration '{value}'. Must be >= 0.")
+                        return
+                
+                target[key] = value
 
-    def _deep_update(self, base: dict, updates: dict):
+    def _deep_update(self, base: Dict[str, Any], updates: Dict[str, Any]) -> None:
         """辞書を再帰的に更新する。"""
         for k, v in updates.items():
             if isinstance(v, dict) and k in base and isinstance(base[k], dict):

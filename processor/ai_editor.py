@@ -17,7 +17,39 @@ class AIEditor:
         self.api_key: Optional[str] = api_key or os.getenv("GEMINI_API_KEY")
         if self.api_key:
             genai.configure(api_key=self.api_key)
+
+            # 指定されたモデルが利用可能かチェックし、必要に応じて自動取得
+            try:
+                available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+
+                # 完全一致または部分一致を確認
+                target_model = None
+                # 1. 完全一致
+                if model_name in available_models:
+                    target_model = model_name
+                # 2. プレフィックス付きで一致
+                elif f"models/{model_name}" in available_models:
+                    target_model = f"models/{model_name}"
+                # 3. 指定名がプレフィックス付きで、リストにプレフィックスなしがある場合
+                elif model_name.startswith("models/") and model_name.replace("models/", "") in available_models:
+                    target_model = model_name.replace("models/", "")
+
+                # 見つからなければ、利用可能なものから探す
+                if not target_model and available_models:
+                    for m in available_models:
+                        if "gemini-1.5-flash" in m:
+                            target_model = m
+                            break
+                    if not target_model:
+                        target_model = available_models[0]
+
+                if target_model:
+                    model_name = target_model
+            except Exception as e:
+                print(f"[AIEditor] Could not fetch models: {e}. Using default name.")
+
         self.model = genai.GenerativeModel(model_name)
+
 
     def refine_segment(self, 
                        text: str, 
@@ -56,7 +88,8 @@ class AIEditor:
                      segments: SegmentList, 
                      global_instruction: str,
                      chunk_size: int = 50,
-                     context_overlap: int = 3) -> SegmentList:
+                     context_overlap: int = 3,
+                     progress_callback: Optional[Any] = None) -> SegmentList:
         """
         全セグメントをチャンク分割して修正する。
         チャンク間での文脈（口調等）を維持するため、前のチャンクの末尾をコンテキストに含める。
@@ -65,9 +98,14 @@ class AIEditor:
             return segments
 
         all_refined_texts = []
+        total_chunks = (len(segments) + chunk_size - 1) // chunk_size
         
         # チャンクごとにループ
         for i in range(0, len(segments), chunk_size):
+            chunk_idx = (i // chunk_size) + 1
+            if progress_callback:
+                progress_callback(f"AI修正中 (チャンク {chunk_idx}/{total_chunks})...", int((chunk_idx - 1) / total_chunks * 100))
+            
             chunk = segments[i : i + chunk_size]
             
             # コンテキスト（前のチャンクの末尾数件）の取得
